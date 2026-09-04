@@ -2,23 +2,31 @@ pipeline {
     agent any
 
     environment {
-        // Application
+        // ==========================================
+        // APPLICATION
+        // ==========================================
         APP_NAME = 'online-exam-system-backend'
         CONTAINER_NAME = 'online-exam-backend'
         APP_PORT = '5000'
 
-        // Docker Hub
+        // ==========================================
+        // DOCKER HUB
+        // ==========================================
         IMAGE_NAME = 'vishnumadhu/online-exam-system-backend'
         IMAGE_TAG = "${BUILD_NUMBER}"
 
-        // Jenkins Credentials IDs
+        // ==========================================
+        // JENKINS CREDENTIALS
+        // ==========================================
         DOCKER_CREDENTIALS = 'dockerhub-credentials'
         SSH_CREDENTIALS = 'deployment-server-ssh'
         MONGO_CREDENTIALS = 'mongodb-uri'
         JWT_CREDENTIALS = 'jwt-secret'
 
-        // Deployment Server
-        DEPLOY_HOST = 'YOUR_EC2_PUBLIC_IP'
+        // ==========================================
+        // DEPLOYMENT SERVER
+        // ==========================================
+        DEPLOY_HOST = '13.206.69.212'
         DEPLOY_USER = 'ubuntu'
     }
 
@@ -28,20 +36,16 @@ pipeline {
         // CI - CONTINUOUS INTEGRATION
         // ==========================================
 
-        stage('Checkout') {
-            steps {
-                echo 'Checking out source code...'
-                checkout scm
-            }
-        }
-
         stage('Install Dependencies') {
             steps {
                 echo 'Installing backend dependencies...'
 
                 sh '''
-                    cd backend
-                    npm ci
+                    docker run --rm \
+                        -v "$WORKSPACE/backend:/app" \
+                        -w /app \
+                        node:20-alpine \
+                        npm ci
                 '''
             }
         }
@@ -51,13 +55,17 @@ pipeline {
                 echo 'Running ESLint...'
 
                 sh '''
-                    cd backend
-
-                    if npm run | grep -q "lint"; then
-                        npm run lint
-                    else
-                        echo "Lint script not configured. Skipping..."
-                    fi
+                    docker run --rm \
+                        -v "$WORKSPACE/backend:/app" \
+                        -w /app \
+                        node:20-alpine \
+                        sh -c '
+                            if npm run | grep -q "lint"; then
+                                npm run lint
+                            else
+                                echo "Lint script not configured. Skipping..."
+                            fi
+                        '
                 '''
             }
         }
@@ -67,13 +75,17 @@ pipeline {
                 echo 'Running unit tests...'
 
                 sh '''
-                    cd backend
-
-                    if npm run | grep -q "test"; then
-                        npm test
-                    else
-                        echo "Test script not configured. Skipping..."
-                    fi
+                    docker run --rm \
+                        -v "$WORKSPACE/backend:/app" \
+                        -w /app \
+                        node:20-alpine \
+                        sh -c '
+                            if npm run | grep -q "test"; then
+                                npm test
+                            else
+                                echo "Test script not configured. Skipping..."
+                            fi
+                        '
                 '''
             }
         }
@@ -83,18 +95,25 @@ pipeline {
                 echo 'Checking Node.js syntax...'
 
                 sh '''
-                    node --check backend/server.js
+                    docker run --rm \
+                        -v "$WORKSPACE/backend:/app" \
+                        -w /app \
+                        node:20-alpine \
+                        node --check server.js
                 '''
             }
         }
 
         stage('Dependency Security Scan') {
             steps {
-                echo 'Scanning npm dependencies...'
+                echo 'Scanning npm dependencies for vulnerabilities...'
 
                 sh '''
-                    cd backend
-                    npm audit --audit-level=high || true
+                    docker run --rm \
+                        -v "$WORKSPACE/backend:/app" \
+                        -w /app \
+                        node:20-alpine \
+                        sh -c 'npm audit --audit-level=high || true'
                 '''
             }
         }
@@ -105,7 +124,7 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                echo "Building Docker image ${IMAGE_NAME}:${IMAGE_TAG}"
+                echo "Building Docker image: ${IMAGE_NAME}:${IMAGE_TAG}"
 
                 sh '''
                     docker build \
@@ -138,7 +157,7 @@ pipeline {
 
         stage('Docker Smoke Test') {
             steps {
-                echo 'Starting temporary container...'
+                echo 'Starting temporary Docker container...'
 
                 withCredentials([
                     string(
@@ -152,21 +171,31 @@ pipeline {
                 ]) {
 
                     sh '''
+                        set -e
+
                         docker run -d \
                             --name ${APP_NAME}-test \
                             -p 5001:${APP_PORT} \
+                            -e NODE_ENV=production \
+                            -e PORT=${APP_PORT} \
                             -e MONGO_URI="${MONGO_URI}" \
                             -e JWT_SECRET="${JWT_SECRET}" \
-                            -e PORT=${APP_PORT} \
                             ${IMAGE_NAME}:${IMAGE_TAG}
 
-                        echo "Waiting for application..."
+                        echo "Waiting for application to start..."
                         sleep 10
 
-                        echo "Container status:"
-                        docker ps -a | grep ${APP_NAME}-test
+                        echo "Checking container status..."
 
-                        echo "Container logs:"
+                        if ! docker ps | grep -q ${APP_NAME}-test; then
+                            echo "Container failed to start!"
+                            docker logs ${APP_NAME}-test || true
+                            exit 1
+                        fi
+
+                        echo "Container is running."
+
+                        echo "Application logs:"
                         docker logs ${APP_NAME}-test
 
                         echo "Checking application endpoint..."
@@ -198,6 +227,7 @@ pipeline {
 
         stage('Docker Hub Login & Push') {
             steps {
+                echo 'Logging into Docker Hub and pushing image...'
 
                 withCredentials([
                     usernamePassword(
@@ -208,6 +238,8 @@ pipeline {
                 ]) {
 
                     sh '''
+                        set -e
+
                         echo "${DOCKER_PASSWORD}" | docker login \
                             -u "${DOCKER_USERNAME}" \
                             --password-stdin
@@ -219,6 +251,8 @@ pipeline {
                         echo "Pushing latest image..."
 
                         docker push ${IMAGE_NAME}:latest
+
+                        echo "Docker images pushed successfully."
                     '''
                 }
             }
@@ -226,8 +260,7 @@ pipeline {
 
         stage('Deploy to EC2') {
             steps {
-
-                echo "Deploying ${IMAGE_NAME}:${IMAGE_TAG} to ${DEPLOY_HOST}"
+                echo "Deploying ${IMAGE_NAME}:${IMAGE_TAG} to ${DEPLOY_HOST}..."
 
                 withCredentials([
                     usernamePassword(
@@ -248,13 +281,15 @@ pipeline {
                     sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
 
                         sh '''
+                            set -e
+
                             ssh -o StrictHostKeyChecking=no \
                                 ${DEPLOY_USER}@${DEPLOY_HOST} << EOF
 
                                 set -e
 
                                 echo "=========================================="
-                                echo "Deploying Online Exam System Backend"
+                                echo "ONLINE EXAM SYSTEM DEPLOYMENT"
                                 echo "=========================================="
 
                                 echo "Logging into Docker Hub..."
@@ -263,7 +298,7 @@ pipeline {
                                     -u "${DOCKER_USERNAME}" \
                                     --password-stdin
 
-                                echo "Pulling image..."
+                                echo "Pulling Docker image..."
 
                                 docker pull ${IMAGE_NAME}:${IMAGE_TAG}
 
@@ -272,7 +307,7 @@ pipeline {
                                 docker stop ${CONTAINER_NAME} || true
                                 docker rm ${CONTAINER_NAME} || true
 
-                                echo "Starting new container..."
+                                echo "Starting new application container..."
 
                                 docker run -d \
                                     --name ${CONTAINER_NAME} \
@@ -284,19 +319,26 @@ pipeline {
                                     -e JWT_SECRET="${JWT_SECRET}" \
                                     ${IMAGE_NAME}:${IMAGE_TAG}
 
-                                echo "Waiting for application..."
+                                echo "Waiting for application to start..."
 
                                 sleep 10
 
-                                echo "Container status:"
+                                echo "Checking container..."
 
-                                docker ps | grep ${CONTAINER_NAME}
+                                if ! docker ps | grep -q ${CONTAINER_NAME}; then
+                                    echo "Deployment failed: container is not running."
+                                    docker logs ${CONTAINER_NAME} || true
+                                    exit 1
+                                fi
+
+                                echo "Container is running."
 
                                 echo "Application logs:"
-
                                 docker logs --tail 50 ${CONTAINER_NAME}
 
-                                echo "Deployment completed successfully."
+                                echo "=========================================="
+                                echo "DEPLOYMENT SUCCESSFUL"
+                                echo "=========================================="
 
                             EOF
                         '''
@@ -307,7 +349,6 @@ pipeline {
 
         stage('Post Deployment Health Check') {
             steps {
-
                 echo 'Checking deployed application...'
 
                 sh '''
@@ -337,8 +378,8 @@ pipeline {
             '''
 
             echo "Application : ${APP_NAME}"
-            echo "Image       : ${IMAGE_NAME}:${IMAGE_TAG}"
-            echo "Build       : ${BUILD_NUMBER}"
+            echo "Docker Image: ${IMAGE_NAME}:${IMAGE_TAG}"
+            echo "Build Number: ${BUILD_NUMBER}"
             echo "Deployment  : SUCCESS"
         }
 
@@ -349,12 +390,12 @@ pipeline {
             ==========================================
             '''
 
-            echo "Build ${BUILD_NUMBER} failed."
-            echo "Check Jenkins console output."
+            echo "Build Number: ${BUILD_NUMBER}"
+            echo "Deployment failed."
+            echo "Check Jenkins console output for details."
         }
 
         always {
-
             echo 'Cleaning Jenkins Docker resources...'
 
             sh '''
