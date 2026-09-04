@@ -1,0 +1,10 @@
+# This is a Node.js project; install application dependencies with:
+# cd backend && npm install
+
+Node.js >= 20
+MongoDB >= 6
+
+# Required backend environment variables:
+# PORT=5000
+# MONGO_URI=<your MongoDB connection string>
+# JWT_SECRET=<your JWT signing secret>
