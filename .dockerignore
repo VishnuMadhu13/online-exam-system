@@ -1,9 +1,13 @@
 node_modules
 backend/node_modules
+
 backend/.env
 backend/.env.local
+
 .git
 .gitignore
+
 Jenkinsfile
 README.md
+
 npm-debug.log

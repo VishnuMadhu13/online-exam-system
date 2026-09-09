@@ -20,7 +20,6 @@ pipeline {
         // ==========================================
         DOCKER_CREDENTIALS = 'dockerhub-credentials'
         SSH_CREDENTIALS = 'deployment-server-ssh'
-        MONGO_CREDENTIALS = 'mongodb-uri'
         JWT_CREDENTIALS = 'jwt-secret'
 
         // ==========================================
@@ -142,12 +141,10 @@ pipeline {
 
                 sh '''
                     if command -v trivy >/dev/null 2>&1; then
-
                         trivy image \
                             --severity HIGH,CRITICAL \
                             --exit-code 0 \
                             ${IMAGE_NAME}:${IMAGE_TAG}
-
                     else
                         echo "Trivy is not installed. Skipping image scan."
                     fi
@@ -155,70 +152,138 @@ pipeline {
             }
         }
 
+        // ==========================================
+        // DOCKER SMOKE TEST
+        // ==========================================
+
         stage('Docker Smoke Test') {
             steps {
-                echo 'Starting temporary Docker container...'
+                echo 'Starting Docker smoke test with MongoDB...'
 
                 withCredentials([
-                    string(
-                        credentialsId: "${MONGO_CREDENTIALS}",
-                        variable: 'MONGO_URI'
-                    ),
                     string(
                         credentialsId: "${JWT_CREDENTIALS}",
                         variable: 'JWT_SECRET'
                     )
                 ]) {
-
                     sh '''
                         set -e
 
-                        echo "Starting Docker container..."
+                        NETWORK_NAME="online-exam-network"
+                        MONGO_CONTAINER="online-exam-mongo-test"
+                        BACKEND_CONTAINER="${APP_NAME}-test"
+
+                        echo "=========================================="
+                        echo "DOCKER SMOKE TEST"
+                        echo "=========================================="
+
+                        echo "Creating Docker network..."
+
+                        docker network create ${NETWORK_NAME} 2>/dev/null || true
+
+                        echo "Cleaning up old test containers..."
+
+                        docker rm -f ${BACKEND_CONTAINER} 2>/dev/null || true
+                        docker rm -f ${MONGO_CONTAINER} 2>/dev/null || true
+
+                        echo ""
+                        echo "Starting MongoDB container..."
 
                         docker run -d \
-                            --name ${APP_NAME}-test \
-                            -p 5001:${APP_PORT} \
-                            -e NODE_ENV=production \
-                            -e PORT=${APP_PORT} \
-                            -e MONGO_URI="${MONGO_URI}" \
-                            -e JWT_SECRET="${JWT_SECRET}" \
-                            ${IMAGE_NAME}:${IMAGE_TAG}
+                            --name ${MONGO_CONTAINER} \
+                            --network ${NETWORK_NAME} \
+                            mongo:7
 
-                        echo "Waiting for application to become healthy..."
+                        echo "MongoDB container started."
+
+                        echo ""
+                        echo "Waiting for MongoDB to become ready..."
 
                         for i in $(seq 1 30); do
 
-                            if curl -fsS http://localhost:5001/health > /dev/null 2>&1; then
-                                echo "Application is healthy!"
+                            if docker exec ${MONGO_CONTAINER} \
+                                mongosh --quiet \
+                                --eval "db.adminCommand('ping').ok" \
+                                2>/dev/null | grep -q "1"; then
+
+                                echo "MongoDB is ready!"
                                 break
                             fi
 
-                            if ! docker ps --format '{{.Names}}' | grep -q "^${APP_NAME}-test$"; then
-                                echo "Container stopped unexpectedly!"
-                                docker logs ${APP_NAME}-test || true
-                                exit 1
-                            fi
+                            echo "Waiting for MongoDB... attempt ${i}/30"
 
-                            echo "Waiting for application... attempt ${i}/30"
                             sleep 2
 
                             if [ "$i" -eq 30 ]; then
-                                echo "Application failed to become healthy!"
+                                echo "MongoDB failed to become ready!"
 
-                                echo "=========================================="
-                                echo "CONTAINER LOGS"
-                                echo "=========================================="
-
-                                docker logs ${APP_NAME}-test || true
+                                docker logs ${MONGO_CONTAINER} || true
 
                                 exit 1
                             fi
 
                         done
 
-                        echo "=========================================="
-                        echo "APPLICATION HEALTH CHECK"
-                        echo "=========================================="
+                        echo ""
+                        echo "Starting backend container..."
+
+                        docker run -d \
+                            --name ${BACKEND_CONTAINER} \
+                            --network ${NETWORK_NAME} \
+                            -p 5001:${APP_PORT} \
+                            -e NODE_ENV=production \
+                            -e PORT=${APP_PORT} \
+                            -e MONGO_URI="mongodb://${MONGO_CONTAINER}:27017/online-exam-system" \
+                            -e JWT_SECRET="${JWT_SECRET}" \
+                            ${IMAGE_NAME}:${IMAGE_TAG}
+
+                        echo "Backend container started."
+
+                        echo ""
+                        echo "Waiting for backend to become healthy..."
+
+                        for i in $(seq 1 30); do
+
+                            if curl -fsS http://localhost:5001/health > /dev/null 2>&1; then
+
+                                echo "Backend is healthy!"
+
+                                break
+                            fi
+
+                            if ! docker ps --format '{{.Names}}' | grep -q "^${BACKEND_CONTAINER}$"; then
+
+                                echo "Backend container stopped unexpectedly!"
+
+                                docker logs ${BACKEND_CONTAINER} || true
+                                docker logs ${MONGO_CONTAINER} || true
+
+                                exit 1
+                            fi
+
+                            echo "Waiting for backend... attempt ${i}/30"
+
+                            sleep 2
+
+                            if [ "$i" -eq 30 ]; then
+
+                                echo "Backend health check failed!"
+
+                                docker logs ${BACKEND_CONTAINER} || true
+                                docker logs ${MONGO_CONTAINER} || true
+
+                                exit 1
+                            fi
+
+                        done
+
+                        echo ""
+                        echo "Testing root endpoint..."
+
+                        curl -f http://localhost:5001/
+
+                        echo ""
+                        echo "Testing health endpoint..."
 
                         curl -f http://localhost:5001/health
 
@@ -233,14 +298,29 @@ pipeline {
             post {
                 always {
                     sh '''
-                        echo "Container logs:"
-                        docker logs ${APP_NAME}-test || true
+                        echo ""
+                        echo "=========================================="
+                        echo "BACKEND LOGS"
+                        echo "=========================================="
 
-                        echo "Stopping test container..."
-                        docker stop ${APP_NAME}-test || true
+                        docker logs ${APP_NAME}-test 2>/dev/null || true
 
-                        echo "Removing test container..."
-                        docker rm ${APP_NAME}-test || true
+                        echo ""
+                        echo "=========================================="
+                        echo "MONGODB LOGS"
+                        echo "=========================================="
+
+                        docker logs online-exam-mongo-test 2>/dev/null || true
+
+                        echo ""
+                        echo "Cleaning smoke-test containers..."
+
+                        docker rm -f ${APP_NAME}-test 2>/dev/null || true
+                        docker rm -f online-exam-mongo-test 2>/dev/null || true
+
+                        echo "Removing smoke-test network..."
+
+                        docker network rm online-exam-network 2>/dev/null || true
                     '''
                 }
             }
@@ -261,7 +341,6 @@ pipeline {
                         passwordVariable: 'DOCKER_PASSWORD'
                     )
                 ]) {
-
                     sh '''
                         set -e
 
@@ -283,6 +362,10 @@ pipeline {
             }
         }
 
+        // ==========================================
+        // DEPLOY TO EC2
+        // ==========================================
+
         stage('Deploy to EC2') {
             steps {
                 echo "Deploying ${IMAGE_NAME}:${IMAGE_TAG} to ${DEPLOY_HOST}..."
@@ -292,10 +375,6 @@ pipeline {
                         credentialsId: "${DOCKER_CREDENTIALS}",
                         usernameVariable: 'DOCKER_USERNAME',
                         passwordVariable: 'DOCKER_PASSWORD'
-                    ),
-                    string(
-                        credentialsId: "${MONGO_CREDENTIALS}",
-                        variable: 'MONGO_URI'
                     ),
                     string(
                         credentialsId: "${JWT_CREDENTIALS}",
@@ -313,68 +392,178 @@ pipeline {
 
                                 set -e
 
+                                NETWORK_NAME="online-exam-network"
+                                MONGO_CONTAINER="online-exam-mongo"
+                                BACKEND_CONTAINER="${CONTAINER_NAME}"
+                                MONGO_VOLUME="online-exam-mongo-data"
+
                                 echo "=========================================="
                                 echo "ONLINE EXAM SYSTEM DEPLOYMENT"
                                 echo "=========================================="
 
+                                echo ""
                                 echo "Logging into Docker Hub..."
 
                                 echo "${DOCKER_PASSWORD}" | docker login \
                                     -u "${DOCKER_USERNAME}" \
                                     --password-stdin
 
+                                echo ""
                                 echo "Pulling Docker image..."
 
                                 docker pull ${IMAGE_NAME}:${IMAGE_TAG}
 
-                                echo "Stopping existing container..."
+                                echo ""
+                                echo "Creating Docker network..."
 
-                                docker stop ${CONTAINER_NAME} || true
-                                docker rm ${CONTAINER_NAME} || true
+                                docker network create ${NETWORK_NAME} 2>/dev/null || true
 
-                                echo "Starting new application container..."
+                                echo ""
+                                echo "Creating MongoDB volume..."
 
-                                docker run -d \
-                                    --name ${CONTAINER_NAME} \
-                                    --restart unless-stopped \
-                                    -p ${APP_PORT}:${APP_PORT} \
-                                    -e NODE_ENV=production \
-                                    -e PORT=${APP_PORT} \
-                                    -e MONGO_URI="${MONGO_URI}" \
-                                    -e JWT_SECRET="${JWT_SECRET}" \
-                                    ${IMAGE_NAME}:${IMAGE_TAG}
+                                docker volume create ${MONGO_VOLUME} 2>/dev/null || true
 
-                                echo "Waiting for application to become healthy..."
+                                echo ""
+                                echo "Checking MongoDB container..."
+
+                                if docker ps -a --format '{{.Names}}' | grep -q "^${MONGO_CONTAINER}$"; then
+
+                                    echo "MongoDB container already exists."
+
+                                    if ! docker ps --format '{{.Names}}' | grep -q "^${MONGO_CONTAINER}$"; then
+
+                                        echo "Starting existing MongoDB container..."
+
+                                        docker start ${MONGO_CONTAINER}
+
+                                    else
+
+                                        echo "MongoDB container is already running."
+
+                                    fi
+
+                                else
+
+                                    echo "Creating MongoDB container..."
+
+                                    docker run -d \
+                                        --name ${MONGO_CONTAINER} \
+                                        --restart unless-stopped \
+                                        --network ${NETWORK_NAME} \
+                                        -v ${MONGO_VOLUME}:/data/db \
+                                        mongo:7
+
+                                fi
+
+                                echo ""
+                                echo "Waiting for MongoDB to become ready..."
 
                                 for i in $(seq 1 30); do
 
-                                    if curl -fsS http://localhost:${APP_PORT}/health > /dev/null 2>&1; then
-                                        echo "Application is healthy!"
+                                    if docker exec ${MONGO_CONTAINER} \
+                                        mongosh --quiet \
+                                        --eval "db.adminCommand('ping').ok" \
+                                        2>/dev/null | grep -q "1"; then
+
+                                        echo "MongoDB is ready!"
+
                                         break
                                     fi
 
-                                    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-                                        echo "Deployment failed: container is not running."
-                                        docker logs ${CONTAINER_NAME} || true
-                                        exit 1
-                                    fi
+                                    echo "Waiting for MongoDB... attempt ${i}/30"
 
-                                    echo "Waiting for application... attempt ${i}/30"
                                     sleep 2
 
                                     if [ "$i" -eq 30 ]; then
-                                        echo "Application failed to become healthy."
-                                        docker logs ${CONTAINER_NAME} || true
+
+                                        echo "MongoDB failed to become ready!"
+
+                                        docker logs ${MONGO_CONTAINER} || true
+
                                         exit 1
                                     fi
 
                                 done
 
-                                echo "Container is running."
+                                echo ""
+                                echo "Stopping existing backend container..."
 
-                                echo "Application logs:"
-                                docker logs --tail 50 ${CONTAINER_NAME}
+                                docker stop ${BACKEND_CONTAINER} 2>/dev/null || true
+                                docker rm ${BACKEND_CONTAINER} 2>/dev/null || true
 
+                                echo ""
+                                echo "Starting new backend container..."
+
+                                docker run -d \
+                                    --name ${BACKEND_CONTAINER} \
+                                    --restart unless-stopped \
+                                    --network ${NETWORK_NAME} \
+                                    -p ${APP_PORT}:${APP_PORT} \
+                                    -e NODE_ENV=production \
+                                    -e PORT=${APP_PORT} \
+                                    -e MONGO_URI="mongodb://${MONGO_CONTAINER}:27017/online-exam-system" \
+                                    -e JWT_SECRET="${JWT_SECRET}" \
+                                    ${IMAGE_NAME}:${IMAGE_TAG}
+
+                                echo ""
+                                echo "Backend container started."
+
+                                echo ""
+                                echo "Waiting for application to become healthy..."
+
+                                for i in $(seq 1 30); do
+
+                                    if curl -fsS \
+                                        http://localhost:${APP_PORT}/health \
+                                        > /dev/null 2>&1; then
+
+                                        echo "Application is healthy!"
+
+                                        break
+                                    fi
+
+                                    if ! docker ps --format '{{.Names}}' | grep -q "^${BACKEND_CONTAINER}$"; then
+
+                                        echo "Deployment failed: backend container is not running."
+
+                                        docker logs ${BACKEND_CONTAINER} || true
+                                        docker logs ${MONGO_CONTAINER} || true
+
+                                        exit 1
+                                    fi
+
+                                    echo "Waiting for application... attempt ${i}/30"
+
+                                    sleep 2
+
+                                    if [ "$i" -eq 30 ]; then
+
+                                        echo "Application failed to become healthy."
+
+                                        docker logs ${BACKEND_CONTAINER} || true
+                                        docker logs ${MONGO_CONTAINER} || true
+
+                                        exit 1
+                                    fi
+
+                                done
+
+                                echo ""
+                                echo "Backend container status:"
+
+                                docker ps --filter "name=${BACKEND_CONTAINER}"
+
+                                echo ""
+                                echo "MongoDB container status:"
+
+                                docker ps --filter "name=${MONGO_CONTAINER}"
+
+                                echo ""
+                                echo "Backend application logs:"
+
+                                docker logs --tail 50 ${BACKEND_CONTAINER}
+
+                                echo ""
                                 echo "=========================================="
                                 echo "DEPLOYMENT SUCCESSFUL"
                                 echo "=========================================="
@@ -386,6 +575,10 @@ EOF
             }
         }
 
+        // ==========================================
+        // POST DEPLOYMENT HEALTH CHECK
+        // ==========================================
+
         stage('Post Deployment Health Check') {
             steps {
                 echo 'Checking deployed application...'
@@ -395,21 +588,29 @@ EOF
 
                     for i in $(seq 1 30); do
 
-                        if curl -fsS http://${DEPLOY_HOST}:${APP_PORT}/health > /dev/null 2>&1; then
+                        if curl -fsS \
+                            http://${DEPLOY_HOST}:${APP_PORT}/health \
+                            > /dev/null 2>&1; then
+
                             echo "Application is responding!"
+
                             break
                         fi
 
                         echo "Waiting for application... attempt ${i}/30"
+
                         sleep 2
 
                         if [ "$i" -eq 30 ]; then
+
                             echo "Application health check failed!"
+
                             exit 1
                         fi
 
                     done
 
+                    echo ""
                     echo "=========================================="
                     echo "APPLICATION HEALTH CHECK PASSED"
                     echo "=========================================="
