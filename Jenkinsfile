@@ -173,6 +173,8 @@ pipeline {
                     sh '''
                         set -e
 
+                        echo "Starting Docker container..."
+
                         docker run -d \
                             --name ${APP_NAME}-test \
                             -p 5001:${APP_PORT} \
@@ -182,30 +184,48 @@ pipeline {
                             -e JWT_SECRET="${JWT_SECRET}" \
                             ${IMAGE_NAME}:${IMAGE_TAG}
 
-                        echo "Waiting for application to start..."
-                        sleep 10
+                        echo "Waiting for application to become healthy..."
 
-                        echo "Checking container status..."
+                        for i in $(seq 1 30); do
 
-                        if ! docker ps | grep -q ${APP_NAME}-test; then
-                            echo "Container failed to start!"
-                            docker logs ${APP_NAME}-test || true
-                            exit 1
-                        fi
+                            if curl -fsS http://localhost:5001/health > /dev/null 2>&1; then
+                                echo "Application is healthy!"
+                                break
+                            fi
 
-                        echo "Container is running."
+                            if ! docker ps --format '{{.Names}}' | grep -q "^${APP_NAME}-test$"; then
+                                echo "Container stopped unexpectedly!"
+                                docker logs ${APP_NAME}-test || true
+                                exit 1
+                            fi
 
-                        echo "Application logs:"
-                        docker logs ${APP_NAME}-test
+                            echo "Waiting for application... attempt ${i}/30"
+                            sleep 2
 
-                        echo "Checking application endpoint..."
+                            if [ "$i" -eq 30 ]; then
+                                echo "Application failed to become healthy!"
 
-                        curl -f http://localhost:5001/ || {
-                            echo "Application smoke test failed!"
-                            exit 1
-                        }
+                                echo "=========================================="
+                                echo "CONTAINER LOGS"
+                                echo "=========================================="
 
-                        echo "Docker smoke test passed!"
+                                docker logs ${APP_NAME}-test || true
+
+                                exit 1
+                            fi
+
+                        done
+
+                        echo "=========================================="
+                        echo "APPLICATION HEALTH CHECK"
+                        echo "=========================================="
+
+                        curl -f http://localhost:5001/health
+
+                        echo ""
+                        echo "=========================================="
+                        echo "DOCKER SMOKE TEST PASSED"
+                        echo "=========================================="
                     '''
                 }
             }
@@ -213,8 +233,13 @@ pipeline {
             post {
                 always {
                     sh '''
+                        echo "Container logs:"
                         docker logs ${APP_NAME}-test || true
+
+                        echo "Stopping test container..."
                         docker stop ${APP_NAME}-test || true
+
+                        echo "Removing test container..."
                         docker rm ${APP_NAME}-test || true
                     '''
                 }
@@ -319,17 +344,31 @@ pipeline {
                                     -e JWT_SECRET="${JWT_SECRET}" \
                                     ${IMAGE_NAME}:${IMAGE_TAG}
 
-                                echo "Waiting for application to start..."
+                                echo "Waiting for application to become healthy..."
 
-                                sleep 10
+                                for i in $(seq 1 30); do
 
-                                echo "Checking container..."
+                                    if curl -fsS http://localhost:${APP_PORT}/health > /dev/null 2>&1; then
+                                        echo "Application is healthy!"
+                                        break
+                                    fi
 
-                                if ! docker ps | grep -q ${CONTAINER_NAME}; then
-                                    echo "Deployment failed: container is not running."
-                                    docker logs ${CONTAINER_NAME} || true
-                                    exit 1
-                                fi
+                                    if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+                                        echo "Deployment failed: container is not running."
+                                        docker logs ${CONTAINER_NAME} || true
+                                        exit 1
+                                    fi
+
+                                    echo "Waiting for application... attempt ${i}/30"
+                                    sleep 2
+
+                                    if [ "$i" -eq 30 ]; then
+                                        echo "Application failed to become healthy."
+                                        docker logs ${CONTAINER_NAME} || true
+                                        exit 1
+                                    fi
+
+                                done
 
                                 echo "Container is running."
 
@@ -340,7 +379,7 @@ pipeline {
                                 echo "DEPLOYMENT SUCCESSFUL"
                                 echo "=========================================="
 
-                            EOF
+EOF
                         '''
                     }
                 }
@@ -352,13 +391,32 @@ pipeline {
                 echo 'Checking deployed application...'
 
                 sh '''
-                    sleep 5
+                    echo "Waiting for deployed application..."
 
-                    curl -f http://${DEPLOY_HOST}:${APP_PORT}/
+                    for i in $(seq 1 30); do
+
+                        if curl -fsS http://${DEPLOY_HOST}:${APP_PORT}/health > /dev/null 2>&1; then
+                            echo "Application is responding!"
+                            break
+                        fi
+
+                        echo "Waiting for application... attempt ${i}/30"
+                        sleep 2
+
+                        if [ "$i" -eq 30 ]; then
+                            echo "Application health check failed!"
+                            exit 1
+                        fi
+
+                    done
 
                     echo "=========================================="
                     echo "APPLICATION HEALTH CHECK PASSED"
                     echo "=========================================="
+
+                    curl -f http://${DEPLOY_HOST}:${APP_PORT}/health
+
+                    echo ""
                 '''
             }
         }
