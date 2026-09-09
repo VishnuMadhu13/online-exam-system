@@ -18,7 +18,7 @@ pipeline {
         // ==========================================
         // JENKINS CREDENTIALS
         // ==========================================
-        DOCKER_CREDENTIALS = 'dockerhub-credentials'
+        DOCKER_CREDENTIALS = 'docker-cred'
         SSH_CREDENTIALS = 'deployment-server-ssh'
         JWT_CREDENTIALS = 'jwt-secret'
 
