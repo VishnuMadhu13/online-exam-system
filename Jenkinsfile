@@ -416,7 +416,7 @@ pipeline {
                     echo "Testing frontend..."
 
                     curl --fail \
-                        http://localhost:8080/
+                        http://localhost:8081/
 
                     echo
 
