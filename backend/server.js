@@ -22,33 +22,32 @@ app.use('/api/results', resultRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
-  res.status(200).json({
-    message: 'Online Exam System API is running'
-  });
+    res.status(200).json({
+        message: 'Online Exam System API is running'
+    });
 });
 
 // Health endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    service: 'online-exam-system-backend'
-  });
+    res.status(200).json({
+        status: 'healthy',
+        service: 'online-exam-system-backend'
+    });
 });
 
 const PORT = process.env.PORT || 5000;
 
-// Connect to MongoDB, then start the server
+// Connect to MongoDB
 mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => {
-    console.log('Connected to MongoDB ✅');
+    .connect(process.env.MONGO_URI)
+    .then(() => {
+        console.log('Connected to MongoDB ✅');
 
-    // Listen on all network interfaces so Docker can access the application
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server running on port ${PORT} ✅`);
+        app.listen(PORT, '0.0.0.0', () => {
+            console.log(`Server running on port ${PORT} ✅`);
+        });
+    })
+    .catch((error) => {
+        console.error('MongoDB connection error:', error.message);
+        process.exit(1);
     });
-  })
-  .catch((error) => {
-    console.error('MongoDB connection error:', error.message);
-    process.exit(1);
-  });
