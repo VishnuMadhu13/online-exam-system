@@ -545,7 +545,11 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "Deploying application to EC2..."
+                        echo "=========================================="
+                        echo "Deploying application to EC2"
+                        echo "Host: ${DEPLOY_HOST}"
+                        echo "Image Tag: ${IMAGE_TAG}"
+                        echo "=========================================="
 
                         ssh \
                             -o StrictHostKeyChecking=no \
@@ -560,123 +564,129 @@ pipeline {
                              JWT_SECRET='$JWT_SECRET' \
                              bash -s" <<'REMOTE_SCRIPT'
 
-                        set -e
+set -e
 
-                        echo "Creating application directory..."
+echo "=========================================="
+echo "Connected to EC2"
+echo "=========================================="
 
-                        mkdir -p ~/online-exam-system
+echo "Creating application directory..."
 
-                        cd ~/online-exam-system
+mkdir -p ~/online-exam-system
+cd ~/online-exam-system
 
-                        echo "Logging into Docker Hub..."
+echo "Logging into Docker Hub..."
 
-                        echo "$DOCKER_PASSWORD" | docker login \
-                            -u "$DOCKER_USER" \
-                            --password-stdin
+echo "$DOCKER_PASSWORD" | docker login \
+    -u "$DOCKER_USER" \
+    --password-stdin
 
-                        echo "Creating production Compose file..."
+echo "Creating production Compose file..."
 
-                        cat > docker-compose.yml <<EOF
+cat > docker-compose.yml <<'EOF'
+services:
 
-                        services:
+  mongo:
+    image: mongo:7
+    container_name: online-exam-mongo
+    restart: unless-stopped
+    volumes:
+      - online-exam-mongo-data:/data/db
+    networks:
+      - online-exam-network
 
-                          mongo:
-                            image: mongo:7
-                            container_name: online-exam-mongo
-                            restart: unless-stopped
+  backend:
+    image: ${BACKEND_IMAGE}:${IMAGE_TAG}
+    container_name: online-exam-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      MONGO_URI: mongodb://mongo:27017/online-exam-system
+      JWT_SECRET: ${JWT_SECRET}
+    ports:
+      - "5000:5000"
+    depends_on:
+      - mongo
+    networks:
+      - online-exam-network
 
-                            volumes:
-                              - online-exam-mongo-data:/data/db
+  frontend:
+    image: ${FRONTEND_IMAGE}:${IMAGE_TAG}
+    container_name: online-exam-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - online-exam-network
 
-                            networks:
-                              - online-exam-network
+networks:
+  online-exam-network:
+    driver: bridge
 
+volumes:
+  online-exam-mongo-data:
+EOF
 
-                          backend:
-                            image: ${BACKEND_IMAGE}:${IMAGE_TAG}
+echo "=========================================="
+echo "Validating Docker Compose configuration..."
+echo "=========================================="
 
-                            container_name: online-exam-backend
+docker compose config
 
-                            restart: unless-stopped
+echo "=========================================="
+echo "Pulling Docker images..."
+echo "=========================================="
 
-                            environment:
-                              NODE_ENV: production
-                              PORT: 5000
-                              MONGO_URI: mongodb://mongo:27017/online-exam-system
-                              JWT_SECRET: ${JWT_SECRET}
+docker compose pull
 
-                            ports:
-                              - "5000:5000"
+echo "=========================================="
+echo "Stopping old application..."
+echo "=========================================="
 
-                            depends_on:
-                              - mongo
+docker compose down || true
 
-                            networks:
-                              - online-exam-network
+echo "=========================================="
+echo "Starting application..."
+echo "=========================================="
 
+docker compose up -d
 
-                          frontend:
-                            image: ${FRONTEND_IMAGE}:${IMAGE_TAG}
+echo "=========================================="
+echo "Waiting for services..."
+echo "=========================================="
 
-                            container_name: online-exam-frontend
+sleep 15
 
-                            restart: unless-stopped
+echo "=========================================="
+echo "Compose status"
+echo "=========================================="
 
-                            ports:
-                              - "80:80"
+docker compose ps
 
-                            depends_on:
-                              - backend
+echo "=========================================="
+echo "Backend health check"
+echo "=========================================="
 
-                            networks:
-                              - online-exam-network
+curl --fail http://localhost:5000/health
 
+echo
 
-                        networks:
+echo "=========================================="
+echo "Frontend health check"
+echo "=========================================="
 
-                          online-exam-network:
-                            driver: bridge
+curl --fail http://localhost/
 
+echo
 
-                        volumes:
+echo "=========================================="
+echo "Deployment successful"
+echo "=========================================="
 
-                          online-exam-mongo-data:
-
-                        EOF
-
-                        echo "Pulling Docker images..."
-
-                        docker compose pull
-
-                        echo "Starting application..."
-
-                        docker compose up -d
-
-                        echo "Waiting for services..."
-
-                        sleep 15
-
-                        echo "Compose status:"
-
-                        docker compose ps
-
-                        echo "Checking backend..."
-
-                        curl --fail \
-                            http://localhost:5000/health
-
-                        echo
-
-                        echo "Checking frontend..."
-
-                        curl --fail \
-                            http://localhost/
-
-                        echo
-
-                        echo "Deployment successful."
-
-                        REMOTE_SCRIPT
+REMOTE_SCRIPT
                     '''
                 }
             }
@@ -694,14 +704,18 @@ pipeline {
                 sh '''
                     set -e
 
+                    echo "=========================================="
                     echo "Checking frontend..."
+                    echo "=========================================="
 
                     curl --fail \
                         http://${DEPLOY_HOST}/
 
                     echo
 
+                    echo "=========================================="
                     echo "Checking backend..."
+                    echo "=========================================="
 
                     curl --fail \
                         http://${DEPLOY_HOST}:5000/health
@@ -729,13 +743,13 @@ pipeline {
             ==========================================
 
             Frontend:
-            http://15.206.158.114
+            http://13.207.150.113
 
             Backend:
-            http://15.206.158.114:5000
+            http://13.207.150.113:5000
 
             Backend Health:
-            http://15.206.158.114:5000/health
+            http://13.207.150.113:5000/health
 
             MongoDB:
             Internal Docker network only
