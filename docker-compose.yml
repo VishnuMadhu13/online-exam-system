@@ -5,31 +5,26 @@ services:
     container_name: online-exam-mongo
     restart: unless-stopped
 
-    ports:
-      - "27017:27017"
-
     volumes:
-      - mongo-data:/data/db
+      - online-exam-mongo-data:/data/db
 
     networks:
       - online-exam-network
 
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ${BACKEND_IMAGE}
 
     container_name: online-exam-backend
-
     restart: unless-stopped
-
-    ports:
-      - "5000:5000"
 
     environment:
       NODE_ENV: production
       PORT: 5000
       MONGO_URI: mongodb://mongo:27017/online-exam-system
+      JWT_SECRET: ${JWT_SECRET}
+
+    ports:
+      - "5000:5000"
 
     depends_on:
       - mongo
@@ -37,9 +32,28 @@ services:
     networks:
       - online-exam-network
 
+  frontend:
+    image: ${FRONTEND_IMAGE}
+
+    container_name: online-exam-frontend
+    restart: unless-stopped
+
+    ports:
+      - "80:80"
+
+    depends_on:
+      - backend
+
+    networks:
+      - online-exam-network
+
+
 networks:
+
   online-exam-network:
     driver: bridge
 
+
 volumes:
-  mongo-data:
+
+  online-exam-mongo-data:

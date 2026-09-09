@@ -8,16 +8,18 @@ pipeline {
         // APPLICATION
         // ==========================================
 
-        APP_NAME = 'online-exam-system-backend'
-        CONTAINER_NAME = 'online-exam-backend'
-        APP_PORT = '5000'
+        APP_NAME = 'online-exam-system'
+
 
         // ==========================================
         // DOCKER HUB
         // ==========================================
 
-        IMAGE_NAME = 'vishnumadhu13/online-exam-system-backend'
+        BACKEND_IMAGE = 'vishnumadhu13/online-exam-system-backend'
+        FRONTEND_IMAGE = 'vishnumadhu13/online-exam-system-frontend'
+
         IMAGE_TAG = "${BUILD_NUMBER}"
+
 
         // ==========================================
         // JENKINS CREDENTIALS
@@ -27,8 +29,9 @@ pipeline {
         SSH_CREDENTIALS = 'deployment-server-ssh'
         JWT_CREDENTIALS = 'jwt-secret'
 
+
         // ==========================================
-        // DEPLOYMENT SERVER
+        // EC2
         // ==========================================
 
         DEPLOY_HOST = '15.206.158.114'
@@ -38,358 +41,379 @@ pipeline {
 
     stages {
 
+
         // ==========================================
-        // CI - CONTINUOUS INTEGRATION
+        // CHECKOUT
         // ==========================================
 
-        stage('Install Dependencies') {
+        stage('Checkout') {
 
             steps {
 
-                echo 'Installing backend dependencies...'
+                echo 'Checking out source code...'
 
-                sh '''
-                    set -e
+                checkout scm
+            }
+        }
 
-                    docker run --rm \
-                        -v "$WORKSPACE/backend:/app" \
-                        -w /app \
-                        node:20-alpine \
+
+        // ==========================================
+        // BACKEND DEPENDENCIES
+        // ==========================================
+
+        stage('Backend Dependencies') {
+
+            steps {
+
+                dir('backend') {
+
+                    sh '''
+                        set -e
+
+                        echo "Installing backend dependencies..."
+
                         npm ci
-                '''
+                    '''
+                }
             }
         }
 
 
-        stage('Lint') {
+        // ==========================================
+        // FRONTEND DEPENDENCIES
+        // ==========================================
+
+        stage('Frontend Dependencies') {
 
             steps {
 
-                echo 'Running ESLint...'
+                dir('frontend') {
 
-                sh '''
-                    docker run --rm \
-                        -v "$WORKSPACE/backend:/app" \
-                        -w /app \
-                        node:20-alpine \
-                        sh -c '
-                            if npm run | grep -q "lint"; then
-                                npm run lint
-                            else
-                                echo "Lint script not configured. Skipping..."
-                            fi
-                        '
-                '''
+                    sh '''
+                        set -e
+
+                        echo "Installing frontend dependencies..."
+
+                        npm ci
+                    '''
+                }
             }
         }
 
 
-        stage('Unit Tests') {
+        // ==========================================
+        // BACKEND SYNTAX CHECK
+        // ==========================================
+
+        stage('Backend Syntax Check') {
 
             steps {
 
-                echo 'Running unit tests...'
+                dir('backend') {
 
-                sh '''
-                    docker run --rm \
-                        -v "$WORKSPACE/backend:/app" \
-                        -w /app \
-                        node:20-alpine \
-                        sh -c '
-                            if npm run | grep -q "test"; then
-                                npm test
-                            else
-                                echo "Test script not configured. Skipping..."
-                            fi
-                        '
-                '''
-            }
-        }
+                    sh '''
+                        set -e
 
+                        echo "Checking backend syntax..."
 
-        stage('Syntax Check') {
-
-            steps {
-
-                echo 'Checking Node.js syntax...'
-
-                sh '''
-                    docker run --rm \
-                        -v "$WORKSPACE/backend:/app" \
-                        -w /app \
-                        node:20-alpine \
                         node --check server.js
-                '''
-            }
-        }
-
-
-        stage('Dependency Security Scan') {
-
-            steps {
-
-                echo 'Scanning npm dependencies for vulnerabilities...'
-
-                sh '''
-                    docker run --rm \
-                        -v "$WORKSPACE/backend:/app" \
-                        -w /app \
-                        node:20-alpine \
-                        sh -c 'npm audit --audit-level=high || true'
-                '''
+                    '''
+                }
             }
         }
 
 
         // ==========================================
-        // DOCKER
+        // BACKEND LINT
         // ==========================================
 
-        stage('Build Docker Image') {
+        stage('Backend Lint') {
 
             steps {
 
-                echo "Building Docker image: ${IMAGE_NAME}:${IMAGE_TAG}"
+                dir('backend') {
+
+                    script {
+
+                        def hasLint = sh(
+                            script: '''
+                                node -e "
+                                const p=require('./package.json');
+                                process.exit(p.scripts && p.scripts.lint ? 0 : 1)
+                                "
+                            ''',
+                            returnStatus: true
+                        )
+
+                        if (hasLint == 0) {
+
+                            sh '''
+                                npm run lint
+                            '''
+
+                        } else {
+
+                            echo 'No backend lint script found. Skipping.'
+                        }
+                    }
+                }
+            }
+        }
+
+
+        // ==========================================
+        // FRONTEND LINT
+        // ==========================================
+
+        stage('Frontend Lint') {
+
+            steps {
+
+                dir('frontend') {
+
+                    script {
+
+                        def hasLint = sh(
+                            script: '''
+                                node -e "
+                                const p=require('./package.json');
+                                process.exit(p.scripts && p.scripts.lint ? 0 : 1)
+                                "
+                            ''',
+                            returnStatus: true
+                        )
+
+                        if (hasLint == 0) {
+
+                            sh '''
+                                CI=true npm run lint
+                            '''
+
+                        } else {
+
+                            echo 'No frontend lint script found. Skipping.'
+                        }
+                    }
+                }
+            }
+        }
+
+
+        // ==========================================
+        // FRONTEND BUILD
+        // ==========================================
+
+        stage('Frontend Build') {
+
+            steps {
+
+                dir('frontend') {
+
+                    sh '''
+                        set -e
+
+                        echo "Building React frontend..."
+
+                        CI=true npm run build
+                    '''
+                }
+            }
+        }
+
+
+        // ==========================================
+        // BACKEND SECURITY SCAN
+        // ==========================================
+
+        stage('Backend Dependency Security Scan') {
+
+            steps {
+
+                dir('backend') {
+
+                    sh '''
+                        echo "Running backend npm audit..."
+
+                        npm audit --audit-level=high || true
+                    '''
+                }
+            }
+        }
+
+
+        // ==========================================
+        // FRONTEND SECURITY SCAN
+        // ==========================================
+
+        stage('Frontend Dependency Security Scan') {
+
+            steps {
+
+                dir('frontend') {
+
+                    sh '''
+                        echo "Running frontend npm audit..."
+
+                        npm audit --audit-level=high || true
+                    '''
+                }
+            }
+        }
+
+
+        // ==========================================
+        // BUILD BACKEND DOCKER IMAGE
+        // ==========================================
+
+        stage('Build Backend Docker Image') {
+
+            steps {
 
                 sh '''
                     set -e
+
+                    echo "Building backend Docker image..."
 
                     docker build \
-                        --pull \
-                        -t ${IMAGE_NAME}:${IMAGE_TAG} \
-                        -t ${IMAGE_NAME}:latest \
+                        -f Dockerfile.backend \
+                        -t ${BACKEND_IMAGE}:${IMAGE_TAG} \
+                        -t ${BACKEND_IMAGE}:latest \
                         .
                 '''
             }
         }
 
 
-        stage('Docker Image Scan') {
+        // ==========================================
+        // BUILD FRONTEND DOCKER IMAGE
+        // ==========================================
+
+        stage('Build Frontend Docker Image') {
 
             steps {
 
-                echo 'Scanning Docker image for vulnerabilities...'
-
                 sh '''
-                    if command -v trivy >/dev/null 2>&1; then
+                    set -e
 
-                        trivy image \
-                            --severity HIGH,CRITICAL \
-                            --exit-code 0 \
-                            ${IMAGE_NAME}:${IMAGE_TAG}
+                    echo "Building frontend Docker image..."
 
-                    else
-
-                        echo "Trivy is not installed. Skipping image scan."
-
-                    fi
+                    docker build \
+                        -f Dockerfile.frontend \
+                        -t ${FRONTEND_IMAGE}:${IMAGE_TAG} \
+                        -t ${FRONTEND_IMAGE}:latest \
+                        .
                 '''
             }
         }
 
 
         // ==========================================
-        // DOCKER SMOKE TEST
+        // TRIVY SCAN
         // ==========================================
 
-        stage('Docker Smoke Test') {
+        stage('Trivy Security Scan') {
 
             steps {
 
-                echo 'Starting Docker smoke test with MongoDB...'
+                script {
 
-                withCredentials([
-                    string(
-                        credentialsId: "${JWT_CREDENTIALS}",
-                        variable: 'JWT_SECRET'
+                    def trivyInstalled = sh(
+                        script: 'command -v trivy',
+                        returnStatus: true
                     )
-                ]) {
 
-                    sh '''
-                        set -e
+                    if (trivyInstalled == 0) {
 
-                        NETWORK_NAME="online-exam-network"
-                        MONGO_CONTAINER="online-exam-mongo-test"
-                        BACKEND_CONTAINER="${APP_NAME}-test"
+                        sh '''
+                            set -e
 
-                        echo "=========================================="
-                        echo "DOCKER SMOKE TEST"
-                        echo "=========================================="
+                            echo "Scanning backend image..."
 
+                            trivy image \
+                                --severity HIGH,CRITICAL \
+                                --exit-code 0 \
+                                ${BACKEND_IMAGE}:${IMAGE_TAG}
 
-                        echo "Creating Docker network..."
 
-                        docker network create ${NETWORK_NAME} 2>/dev/null || true
+                            echo "Scanning frontend image..."
 
+                            trivy image \
+                                --severity HIGH,CRITICAL \
+                                --exit-code 0 \
+                                ${FRONTEND_IMAGE}:${IMAGE_TAG}
+                        '''
 
-                        echo "Cleaning up old test containers..."
+                    } else {
 
-                        docker rm -f ${BACKEND_CONTAINER} 2>/dev/null || true
-                        docker rm -f ${MONGO_CONTAINER} 2>/dev/null || true
-
-
-                        echo ""
-                        echo "Starting MongoDB container..."
-
-                        docker run -d \
-                            --name ${MONGO_CONTAINER} \
-                            --network ${NETWORK_NAME} \
-                            mongo:7
-
-
-                        echo "MongoDB container started."
-
-
-                        echo ""
-                        echo "Waiting for MongoDB to become ready..."
-
-
-                        for i in $(seq 1 30); do
-
-                            if docker exec ${MONGO_CONTAINER} \
-                                mongosh --quiet \
-                                --eval "db.adminCommand('ping').ok" \
-                                2>/dev/null | grep -q "1"; then
-
-                                echo "MongoDB is ready!"
-                                break
-                            fi
-
-
-                            echo "Waiting for MongoDB... attempt ${i}/30"
-
-                            sleep 2
-
-
-                            if [ "$i" -eq 30 ]; then
-
-                                echo "MongoDB failed to become ready!"
-
-                                docker logs ${MONGO_CONTAINER} || true
-
-                                exit 1
-                            fi
-
-                        done
-
-
-                        echo ""
-                        echo "Starting backend container..."
-
-
-                        docker run -d \
-                            --name ${BACKEND_CONTAINER} \
-                            --network ${NETWORK_NAME} \
-                            -p 5001:${APP_PORT} \
-                            -e NODE_ENV=production \
-                            -e PORT=${APP_PORT} \
-                            -e MONGO_URI="mongodb://${MONGO_CONTAINER}:27017/online-exam-system" \
-                            -e JWT_SECRET="${JWT_SECRET}" \
-                            ${IMAGE_NAME}:${IMAGE_TAG}
-
-
-                        echo "Backend container started."
-
-
-                        echo ""
-                        echo "Waiting for backend to become healthy..."
-
-
-                        for i in $(seq 1 30); do
-
-                            if curl -fsS \
-                                http://localhost:5001/health \
-                                > /dev/null 2>&1; then
-
-                                echo "Backend is healthy!"
-
-                                break
-                            fi
-
-
-                            if ! docker ps \
-                                --format '{{.Names}}' \
-                                | grep -q "^${BACKEND_CONTAINER}$"; then
-
-                                echo "Backend container stopped unexpectedly!"
-
-                                docker logs ${BACKEND_CONTAINER} || true
-                                docker logs ${MONGO_CONTAINER} || true
-
-                                exit 1
-                            fi
-
-
-                            echo "Waiting for backend... attempt ${i}/30"
-
-                            sleep 2
-
-
-                            if [ "$i" -eq 30 ]; then
-
-                                echo "Backend health check failed!"
-
-                                docker logs ${BACKEND_CONTAINER} || true
-                                docker logs ${MONGO_CONTAINER} || true
-
-                                exit 1
-                            fi
-
-                        done
-
-
-                        echo ""
-                        echo "Testing root endpoint..."
-
-                        curl -f http://localhost:5001/
-
-
-                        echo ""
-                        echo "Testing health endpoint..."
-
-                        curl -f http://localhost:5001/health
-
-
-                        echo ""
-                        echo "=========================================="
-                        echo "DOCKER SMOKE TEST PASSED"
-                        echo "=========================================="
-                    '''
+                        echo 'Trivy is not installed on Jenkins. Skipping image scan.'
+                    }
                 }
             }
+        }
 
+
+        // ==========================================
+        // COMPOSE SMOKE TEST
+        // ==========================================
+
+        stage('Docker Compose Smoke Test') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "Starting temporary Compose environment..."
+
+                    export BACKEND_IMAGE="${BACKEND_IMAGE}:${IMAGE_TAG}"
+                    export FRONTEND_IMAGE="${FRONTEND_IMAGE}:${IMAGE_TAG}"
+
+                    docker compose \
+                        -f docker-compose.test.yml \
+                        -p online-exam-test \
+                        up -d
+
+
+                    echo "Waiting for containers..."
+
+                    sleep 15
+
+
+                    echo "Testing backend..."
+
+                    curl --fail \
+                        http://localhost:5001/health
+
+                    echo
+
+
+                    echo "Testing frontend..."
+
+                    curl --fail \
+                        http://localhost:8080/
+
+                    echo
+
+
+                    echo "Compose smoke test passed."
+
+
+                    docker compose \
+                        -f docker-compose.test.yml \
+                        -p online-exam-test \
+                        down -v
+                '''
+            }
 
             post {
 
                 always {
 
                     sh '''
-                        echo ""
-                        echo "=========================================="
-                        echo "BACKEND LOGS"
-                        echo "=========================================="
-
-                        docker logs ${APP_NAME}-test 2>/dev/null || true
-
-
-                        echo ""
-                        echo "=========================================="
-                        echo "MONGODB LOGS"
-                        echo "=========================================="
-
-                        docker logs online-exam-mongo-test 2>/dev/null || true
-
-
-                        echo ""
-                        echo "Cleaning smoke-test containers..."
-
-                        docker rm -f ${APP_NAME}-test 2>/dev/null || true
-                        docker rm -f online-exam-mongo-test 2>/dev/null || true
-
-
-                        echo "Removing smoke-test network..."
-
-                        docker network rm online-exam-network 2>/dev/null || true
+                        docker compose \
+                            -f docker-compose.test.yml \
+                            -p online-exam-test \
+                            down -v || true
                     '''
                 }
             }
@@ -397,44 +421,57 @@ pipeline {
 
 
         // ==========================================
-        // CD - CONTINUOUS DELIVERY
+        // DOCKER HUB LOGIN
         // ==========================================
 
-        stage('Docker Hub Login & Push') {
+        stage('Docker Hub Login') {
 
             steps {
 
-                echo 'Logging into Docker Hub and pushing image...'
-
                 withCredentials([
+
                     usernamePassword(
                         credentialsId: "${DOCKER_CREDENTIALS}",
-                        usernameVariable: 'DOCKER_USERNAME',
+                        usernameVariable: 'DOCKER_USER',
                         passwordVariable: 'DOCKER_PASSWORD'
                     )
+
                 ]) {
 
                     sh '''
                         set -e
 
-                        echo "${DOCKER_PASSWORD}" | docker login \
-                            -u "${DOCKER_USERNAME}" \
+                        echo "$DOCKER_PASSWORD" | docker login \
+                            -u "$DOCKER_USER" \
                             --password-stdin
-
-
-                        echo "Pushing versioned image..."
-
-                        docker push ${IMAGE_NAME}:${IMAGE_TAG}
-
-
-                        echo "Pushing latest image..."
-
-                        docker push ${IMAGE_NAME}:latest
-
-
-                        echo "Docker images pushed successfully."
                     '''
                 }
+            }
+        }
+
+
+        // ==========================================
+        // PUSH IMAGES
+        // ==========================================
+
+        stage('Push Docker Images') {
+
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "Pushing backend image..."
+
+                    docker push ${BACKEND_IMAGE}:${IMAGE_TAG}
+                    docker push ${BACKEND_IMAGE}:latest
+
+
+                    echo "Pushing frontend image..."
+
+                    docker push ${FRONTEND_IMAGE}:${IMAGE_TAG}
+                    docker push ${FRONTEND_IMAGE}:latest
+                '''
             }
         }
 
@@ -447,9 +484,6 @@ pipeline {
 
             steps {
 
-                echo "Deploying ${IMAGE_NAME}:${BUILD_NUMBER} to ${DEPLOY_HOST}..."
-
-
                 withCredentials([
 
                     sshUserPrivateKey(
@@ -460,7 +494,7 @@ pipeline {
 
                     usernamePassword(
                         credentialsId: "${DOCKER_CREDENTIALS}",
-                        usernameVariable: 'DOCKER_USERNAME',
+                        usernameVariable: 'DOCKER_USER',
                         passwordVariable: 'DOCKER_PASSWORD'
                     ),
 
@@ -472,12 +506,9 @@ pipeline {
                 ]) {
 
                     sh '''
-
                         set -e
 
-                        echo "=========================================="
-                        echo "DEPLOYING TO EC2"
-                        echo "=========================================="
+                        echo "Deploying to EC2..."
 
 
                         ssh \
@@ -485,10 +516,11 @@ pipeline {
                             -o UserKnownHostsFile=/dev/null \
                             -i "$SSH_KEY" \
                             "$SSH_USER@$DEPLOY_HOST" \
-                            "DOCKER_USERNAME='$DOCKER_USERNAME' \
+                            "DOCKER_USER='$DOCKER_USER' \
                              DOCKER_PASSWORD='$DOCKER_PASSWORD' \
-                             IMAGE='$IMAGE_NAME' \
-                             BUILD_NUMBER='$BUILD_NUMBER' \
+                             BACKEND_IMAGE='$BACKEND_IMAGE' \
+                             FRONTEND_IMAGE='$FRONTEND_IMAGE' \
+                             IMAGE_TAG='$IMAGE_TAG' \
                              JWT_SECRET='$JWT_SECRET' \
                              bash -s" <<'REMOTE_SCRIPT'
 
@@ -496,217 +528,135 @@ pipeline {
                         set -e
 
 
-                        echo "=========================================="
-                        echo "EC2 DEPLOYMENT"
-                        echo "=========================================="
+                        echo "Creating application directory..."
 
+                        mkdir -p ~/online-exam-system
 
-                        # ==========================================
-                        # DOCKER HUB LOGIN
-                        # ==========================================
+                        cd ~/online-exam-system
+
 
                         echo "Logging into Docker Hub..."
 
                         echo "$DOCKER_PASSWORD" | docker login \
-                            -u "$DOCKER_USERNAME" \
+                            -u "$DOCKER_USER" \
                             --password-stdin
 
 
-                        # ==========================================
-                        # DOCKER NETWORK
-                        # ==========================================
+                        echo "Creating production Compose file..."
 
-                        echo "Creating Docker network if needed..."
 
-                        docker network inspect online-exam-network \
-                            >/dev/null 2>&1 || \
-                            docker network create online-exam-network
+                        cat > docker-compose.yml <<EOF
 
+                        services:
 
-                        # ==========================================
-                        # MONGODB
-                        # ==========================================
+                          mongo:
+                            image: mongo:7
+                            container_name: online-exam-mongo
+                            restart: unless-stopped
 
-                        echo "Starting MongoDB..."
+                            volumes:
+                              - online-exam-mongo-data:/data/db
 
+                            networks:
+                              - online-exam-network
 
-                        if docker ps -a \
-                            --format '{{.Names}}' \
-                            | grep -q '^online-exam-mongo$'; then
 
-                            echo "MongoDB container already exists."
+                          backend:
+                            image: ${BACKEND_IMAGE}:${IMAGE_TAG}
 
-                            docker start online-exam-mongo 2>/dev/null || true
+                            container_name: online-exam-backend
 
-                        else
+                            restart: unless-stopped
 
-                            echo "Creating persistent MongoDB volume..."
+                            environment:
+                              NODE_ENV: production
+                              PORT: 5000
+                              MONGO_URI: mongodb://mongo:27017/online-exam-system
+                              JWT_SECRET: ${JWT_SECRET}
 
-                            docker volume create online-exam-mongo-data
+                            ports:
+                              - "5000:5000"
 
+                            depends_on:
+                              - mongo
 
-                            echo "Creating MongoDB container..."
+                            networks:
+                              - online-exam-network
 
-                            docker run -d \
-                                --name online-exam-mongo \
-                                --network online-exam-network \
-                                -v online-exam-mongo-data:/data/db \
-                                --restart unless-stopped \
-                                mongo:7
 
-                        fi
+                          frontend:
+                            image: ${FRONTEND_IMAGE}:${IMAGE_TAG}
 
+                            container_name: online-exam-frontend
 
-                        # ==========================================
-                        # WAIT FOR MONGODB
-                        # ==========================================
+                            restart: unless-stopped
 
-                        echo "Waiting for MongoDB..."
+                            ports:
+                              - "80:80"
 
+                            depends_on:
+                              - backend
 
-                        for i in $(seq 1 30); do
+                            networks:
+                              - online-exam-network
 
-                            if docker exec online-exam-mongo \
-                                mongosh --quiet \
-                                --eval "db.adminCommand('ping').ok" \
-                                2>/dev/null | grep -q "1"; then
 
-                                echo "MongoDB is ready!"
+                        networks:
 
-                                break
-                            fi
+                          online-exam-network:
+                            driver: bridge
 
 
-                            echo "Waiting for MongoDB... attempt $i/30"
+                        volumes:
 
-                            sleep 2
+                          online-exam-mongo-data:
 
+                        EOF
 
-                            if [ "$i" -eq 30 ]; then
 
-                                echo "MongoDB failed to become ready."
+                        echo "Pulling Docker images..."
 
-                                docker logs online-exam-mongo || true
+                        docker compose pull
 
-                                exit 1
-                            fi
 
-                        done
+                        echo "Starting application..."
 
+                        docker compose up -d
 
-                        # ==========================================
-                        # PULL APPLICATION IMAGE
-                        # ==========================================
 
-                        echo "Pulling Docker image..."
+                        echo "Waiting for services..."
 
-                        docker pull "$IMAGE:$BUILD_NUMBER"
+                        sleep 15
 
 
-                        # ==========================================
-                        # STOP OLD BACKEND
-                        # ==========================================
+                        echo "Checking Compose status..."
 
-                        echo "Stopping old backend..."
+                        docker compose ps
 
-                        docker rm -f online-exam-backend 2>/dev/null || true
 
+                        echo "Checking backend..."
 
-                        # ==========================================
-                        # START NEW BACKEND
-                        # ==========================================
+                        curl --fail \
+                            http://localhost:5000/health
 
-                        echo "Starting new backend..."
+                        echo
 
 
-                        docker run -d \
-                            --name online-exam-backend \
-                            --network online-exam-network \
-                            -p 5000:5000 \
-                            -e NODE_ENV=production \
-                            -e PORT=5000 \
-                            -e MONGO_URI="mongodb://online-exam-mongo:27017/online-exam-system" \
-                            -e JWT_SECRET="$JWT_SECRET" \
-                            --restart unless-stopped \
-                            "$IMAGE:$BUILD_NUMBER"
+                        echo "Checking frontend..."
 
+                        curl --fail \
+                            http://localhost/
 
-                        echo "Backend container started."
+                        echo
 
 
-                        # ==========================================
-                        # WAIT FOR BACKEND
-                        # ==========================================
+                        echo "Deployment successful."
 
-                        echo "Waiting for backend..."
 
+                        exit 0
 
-                        for i in $(seq 1 30); do
 
-                            if curl -fsS \
-                                http://localhost:5000/health \
-                                >/dev/null 2>&1; then
-
-                                echo "Backend is healthy!"
-
-                                break
-                            fi
-
-
-                            echo "Waiting for backend... attempt $i/30"
-
-                            sleep 2
-
-
-                            if [ "$i" -eq 30 ]; then
-
-                                echo "Backend failed health check."
-
-                                echo ""
-                                echo "Backend logs:"
-                                echo "=========================================="
-
-                                docker logs online-exam-backend || true
-
-                                echo ""
-                                echo "MongoDB logs:"
-                                echo "=========================================="
-
-                                docker logs online-exam-mongo || true
-
-                                exit 1
-                            fi
-
-                        done
-
-
-                        # ==========================================
-                        # DEPLOYMENT STATUS
-                        # ==========================================
-
-                        echo ""
-                        echo "=========================================="
-                        echo "EC2 DEPLOYMENT SUCCESSFUL"
-                        echo "=========================================="
-
-
-                        echo ""
-                        echo "Running containers:"
-
-                        docker ps \
-                            --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-
-
-                        echo ""
-                        echo "Backend health response:"
-
-                        curl -f http://localhost:5000/health
-
-
-                        echo ""
-
-REMOTE_SCRIPT
-
+                        REMOTE_SCRIPT
                     '''
                 }
             }
@@ -721,57 +671,26 @@ REMOTE_SCRIPT
 
             steps {
 
-                echo 'Checking deployed application...'
-
-
                 sh '''
-
                     set -e
 
-                    echo "Waiting for deployed application..."
+                    echo "Checking deployed frontend..."
+
+                    curl --fail \
+                        http://${DEPLOY_HOST}/
+
+                    echo
 
 
-                    for i in $(seq 1 30); do
+                    echo "Checking deployed backend..."
 
-                        if curl -fsS \
-                            http://${DEPLOY_HOST}:${APP_PORT}/health \
-                            > /dev/null 2>&1; then
+                    curl --fail \
+                        http://${DEPLOY_HOST}:5000/health
 
-                            echo "Application is responding!"
-
-                            break
-                        fi
+                    echo
 
 
-                        echo "Waiting for application... attempt ${i}/30"
-
-                        sleep 2
-
-
-                        if [ "$i" -eq 30 ]; then
-
-                            echo "Application health check failed!"
-
-                            exit 1
-                        fi
-
-                    done
-
-
-                    echo ""
-                    echo "=========================================="
-                    echo "APPLICATION HEALTH CHECK PASSED"
-                    echo "=========================================="
-
-
-                    echo ""
-                    echo "Health endpoint response:"
-
-                    curl -f \
-                        http://${DEPLOY_HOST}:${APP_PORT}/health
-
-
-                    echo ""
+                    echo "Application is healthy."
                 '''
             }
         }
@@ -788,14 +707,23 @@ REMOTE_SCRIPT
 
             echo '''
             ==========================================
-                 PIPELINE SUCCESSFUL
+            PIPELINE SUCCESSFUL
+            ==========================================
+
+            Frontend:
+            http://15.206.158.114
+
+            Backend:
+            http://15.206.158.114:5000
+
+            Backend Health:
+            http://15.206.158.114:5000/health
+
+            MongoDB:
+            Internal Docker network only
+
             ==========================================
             '''
-
-            echo "Application : ${APP_NAME}"
-            echo "Docker Image: ${IMAGE_NAME}:${IMAGE_TAG}"
-            echo "Build Number: ${BUILD_NUMBER}"
-            echo "Deployment  : SUCCESS"
         }
 
 
@@ -803,37 +731,21 @@ REMOTE_SCRIPT
 
             echo '''
             ==========================================
-                 PIPELINE FAILED
+            PIPELINE FAILED
+            ==========================================
+
+            Check Jenkins console output.
+
             ==========================================
             '''
-
-            echo "Build Number: ${BUILD_NUMBER}"
-            echo "Deployment failed."
-            echo "Check Jenkins console output for details."
         }
 
 
         always {
 
-            echo 'Cleaning Jenkins Docker resources...'
-
-
             sh '''
-
                 docker logout || true
-
-
-                docker image rm \
-                    ${IMAGE_NAME}:${IMAGE_TAG} || true
-
-
-                docker image rm \
-                    ${IMAGE_NAME}:latest || true
-
             '''
-
-
-            cleanWs()
         }
     }
 }
