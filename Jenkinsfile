@@ -31,7 +31,7 @@ pipeline {
         // DEPLOYMENT SERVER
         // ==========================================
 
-        DEPLOY_HOST = '13.206.69.212'
+        DEPLOY_HOST = '15.206.158.114'
         DEPLOY_USER = 'ubuntu'
     }
 
