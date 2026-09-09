@@ -34,7 +34,7 @@ pipeline {
         // EC2
         // ==========================================
 
-        DEPLOY_HOST = '15.206.158.114'
+        DEPLOY_HOST = '13.207.150.113'
         DEPLOY_USER = 'ubuntu'
     }
 
