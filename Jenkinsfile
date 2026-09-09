@@ -12,7 +12,7 @@ pipeline {
         // ==========================================
         // DOCKER HUB
         // ==========================================
-        IMAGE_NAME = 'vishnumadhu/online-exam-system-backend'
+        IMAGE_NAME = 'vishnumadhu13/online-exam-system-backend'
         IMAGE_TAG = "${BUILD_NUMBER}"
 
         // ==========================================
