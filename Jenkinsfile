@@ -139,8 +139,10 @@ pipeline {
                                     -w /app \
                                     node:20-alpine \
                                     node -e "
-                                    const p=require('./package.json');
-                                    process.exit(p.scripts && p.scripts.lint ? 0 : 1)
+                                        const p=require('./package.json');
+                                        process.exit(
+                                            p.scripts && p.scripts.lint ? 0 : 1
+                                        )
                                     "
                             ''',
                             returnStatus: true
@@ -185,8 +187,10 @@ pipeline {
                                     -w /app \
                                     node:20-alpine \
                                     node -e "
-                                    const p=require('./package.json');
-                                    process.exit(p.scripts && p.scripts.lint ? 0 : 1)
+                                        const p=require('./package.json');
+                                        process.exit(
+                                            p.scripts && p.scripts.lint ? 0 : 1
+                                        )
                                     "
                             ''',
                             returnStatus: true
@@ -359,7 +363,6 @@ pipeline {
                                 --exit-code 0 \
                                 ${BACKEND_IMAGE}:${IMAGE_TAG}
 
-
                             echo "Scanning frontend image..."
 
                             trivy image \
@@ -393,33 +396,48 @@ pipeline {
                     export BACKEND_IMAGE="${BACKEND_IMAGE}:${IMAGE_TAG}"
                     export FRONTEND_IMAGE="${FRONTEND_IMAGE}:${IMAGE_TAG}"
 
-
                     docker compose \
                         -f docker-compose.test.yml \
                         -p online-exam-test \
                         up -d
 
-
                     echo "Waiting for containers..."
-
                     sleep 15
 
+                    echo "=========================================="
+                    echo "CONTAINER STATUS"
+                    echo "=========================================="
 
-                    echo "Testing backend..."
+                    docker compose \
+                        -f docker-compose.test.yml \
+                        -p online-exam-test \
+                        ps
 
-                    curl --fail \
-                        http://localhost:5001/health
+                    echo "=========================================="
+                    echo "FRONTEND PORT CHECK"
+                    echo "=========================================="
 
+                    docker port online-exam-test-frontend-1 || true
+
+                    echo "=========================================="
+                    echo "FRONTEND LOGS"
+                    echo "=========================================="
+
+                    docker logs online-exam-test-frontend-1 || true
+
+                    echo "=========================================="
+                    echo "BACKEND TEST"
+                    echo "=========================================="
+
+                    curl --fail http://localhost:5001/health
                     echo
 
+                    echo "=========================================="
+                    echo "FRONTEND TEST"
+                    echo "=========================================="
 
-                    echo "Testing frontend..."
-
-                    curl --fail \
-                        http://localhost:8081/
-
+                    curl --fail http://localhost:8081/
                     echo
-
 
                     echo "Compose smoke test passed."
                 '''
@@ -486,7 +504,6 @@ pipeline {
                     docker push ${BACKEND_IMAGE}:${IMAGE_TAG}
                     docker push ${BACKEND_IMAGE}:latest
 
-
                     echo "Pushing frontend image..."
 
                     docker push ${FRONTEND_IMAGE}:${IMAGE_TAG}
@@ -530,7 +547,6 @@ pipeline {
 
                         echo "Deploying application to EC2..."
 
-
                         ssh \
                             -o StrictHostKeyChecking=no \
                             -o UserKnownHostsFile=/dev/null \
@@ -544,9 +560,7 @@ pipeline {
                              JWT_SECRET='$JWT_SECRET' \
                              bash -s" <<'REMOTE_SCRIPT'
 
-
                         set -e
-
 
                         echo "Creating application directory..."
 
@@ -554,16 +568,13 @@ pipeline {
 
                         cd ~/online-exam-system
 
-
                         echo "Logging into Docker Hub..."
 
                         echo "$DOCKER_PASSWORD" | docker login \
                             -u "$DOCKER_USER" \
                             --password-stdin
 
-
                         echo "Creating production Compose file..."
-
 
                         cat > docker-compose.yml <<EOF
 
@@ -633,26 +644,21 @@ pipeline {
 
                         EOF
 
-
                         echo "Pulling Docker images..."
 
                         docker compose pull
-
 
                         echo "Starting application..."
 
                         docker compose up -d
 
-
                         echo "Waiting for services..."
 
                         sleep 15
 
-
                         echo "Compose status:"
 
                         docker compose ps
-
 
                         echo "Checking backend..."
 
@@ -661,7 +667,6 @@ pipeline {
 
                         echo
 
-
                         echo "Checking frontend..."
 
                         curl --fail \
@@ -669,9 +674,7 @@ pipeline {
 
                         echo
 
-
                         echo "Deployment successful."
-
 
                         REMOTE_SCRIPT
                     '''
@@ -698,14 +701,12 @@ pipeline {
 
                     echo
 
-
                     echo "Checking backend..."
 
                     curl --fail \
                         http://${DEPLOY_HOST}:5000/health
 
                     echo
-
 
                     echo "Application is healthy."
                 '''
