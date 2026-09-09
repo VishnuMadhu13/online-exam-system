@@ -43,21 +43,6 @@ pipeline {
 
 
         // ==========================================
-        // CHECKOUT
-        // ==========================================
-
-        stage('Checkout') {
-
-            steps {
-
-                echo 'Checking out source code...'
-
-                checkout scm
-            }
-        }
-
-
-        // ==========================================
         // BACKEND DEPENDENCIES
         // ==========================================
 
@@ -72,7 +57,11 @@ pipeline {
 
                         echo "Installing backend dependencies..."
 
-                        npm ci
+                        docker run --rm \
+                            -v "$PWD:/app" \
+                            -w /app \
+                            node:20-alpine \
+                            npm ci
                     '''
                 }
             }
@@ -94,7 +83,11 @@ pipeline {
 
                         echo "Installing frontend dependencies..."
 
-                        npm ci
+                        docker run --rm \
+                            -v "$PWD:/app" \
+                            -w /app \
+                            node:20-alpine \
+                            npm ci
                     '''
                 }
             }
@@ -116,7 +109,11 @@ pipeline {
 
                         echo "Checking backend syntax..."
 
-                        node --check server.js
+                        docker run --rm \
+                            -v "$PWD:/app" \
+                            -w /app \
+                            node:20-alpine \
+                            node --check server.js
                     '''
                 }
             }
@@ -137,10 +134,14 @@ pipeline {
 
                         def hasLint = sh(
                             script: '''
-                                node -e "
-                                const p=require('./package.json');
-                                process.exit(p.scripts && p.scripts.lint ? 0 : 1)
-                                "
+                                docker run --rm \
+                                    -v "$PWD:/app" \
+                                    -w /app \
+                                    node:20-alpine \
+                                    node -e "
+                                    const p=require('./package.json');
+                                    process.exit(p.scripts && p.scripts.lint ? 0 : 1)
+                                    "
                             ''',
                             returnStatus: true
                         )
@@ -148,7 +149,11 @@ pipeline {
                         if (hasLint == 0) {
 
                             sh '''
-                                npm run lint
+                                docker run --rm \
+                                    -v "$PWD:/app" \
+                                    -w /app \
+                                    node:20-alpine \
+                                    npm run lint
                             '''
 
                         } else {
@@ -175,10 +180,14 @@ pipeline {
 
                         def hasLint = sh(
                             script: '''
-                                node -e "
-                                const p=require('./package.json');
-                                process.exit(p.scripts && p.scripts.lint ? 0 : 1)
-                                "
+                                docker run --rm \
+                                    -v "$PWD:/app" \
+                                    -w /app \
+                                    node:20-alpine \
+                                    node -e "
+                                    const p=require('./package.json');
+                                    process.exit(p.scripts && p.scripts.lint ? 0 : 1)
+                                    "
                             ''',
                             returnStatus: true
                         )
@@ -186,7 +195,11 @@ pipeline {
                         if (hasLint == 0) {
 
                             sh '''
-                                CI=true npm run lint
+                                docker run --rm \
+                                    -v "$PWD:/app" \
+                                    -w /app \
+                                    node:20-alpine \
+                                    npm run lint
                             '''
 
                         } else {
@@ -214,7 +227,11 @@ pipeline {
 
                         echo "Building React frontend..."
 
-                        CI=true npm run build
+                        docker run --rm \
+                            -v "$PWD:/app" \
+                            -w /app \
+                            node:20-alpine \
+                            npm run build
                     '''
                 }
             }
@@ -222,7 +239,7 @@ pipeline {
 
 
         // ==========================================
-        // BACKEND SECURITY SCAN
+        // BACKEND DEPENDENCY SECURITY
         // ==========================================
 
         stage('Backend Dependency Security Scan') {
@@ -234,7 +251,11 @@ pipeline {
                     sh '''
                         echo "Running backend npm audit..."
 
-                        npm audit --audit-level=high || true
+                        docker run --rm \
+                            -v "$PWD:/app" \
+                            -w /app \
+                            node:20-alpine \
+                            npm audit --audit-level=high || true
                     '''
                 }
             }
@@ -242,7 +263,7 @@ pipeline {
 
 
         // ==========================================
-        // FRONTEND SECURITY SCAN
+        // FRONTEND DEPENDENCY SECURITY
         // ==========================================
 
         stage('Frontend Dependency Security Scan') {
@@ -254,7 +275,11 @@ pipeline {
                     sh '''
                         echo "Running frontend npm audit..."
 
-                        npm audit --audit-level=high || true
+                        docker run --rm \
+                            -v "$PWD:/app" \
+                            -w /app \
+                            node:20-alpine \
+                            npm audit --audit-level=high || true
                     '''
                 }
             }
@@ -262,7 +287,7 @@ pipeline {
 
 
         // ==========================================
-        // BUILD BACKEND DOCKER IMAGE
+        // BUILD BACKEND IMAGE
         // ==========================================
 
         stage('Build Backend Docker Image') {
@@ -285,7 +310,7 @@ pipeline {
 
 
         // ==========================================
-        // BUILD FRONTEND DOCKER IMAGE
+        // BUILD FRONTEND IMAGE
         // ==========================================
 
         stage('Build Frontend Docker Image') {
@@ -368,6 +393,7 @@ pipeline {
                     export BACKEND_IMAGE="${BACKEND_IMAGE}:${IMAGE_TAG}"
                     export FRONTEND_IMAGE="${FRONTEND_IMAGE}:${IMAGE_TAG}"
 
+
                     docker compose \
                         -f docker-compose.test.yml \
                         -p online-exam-test \
@@ -396,12 +422,6 @@ pipeline {
 
 
                     echo "Compose smoke test passed."
-
-
-                    docker compose \
-                        -f docker-compose.test.yml \
-                        -p online-exam-test \
-                        down -v
                 '''
             }
 
@@ -451,7 +471,7 @@ pipeline {
 
 
         // ==========================================
-        // PUSH IMAGES
+        // PUSH DOCKER IMAGES
         // ==========================================
 
         stage('Push Docker Images') {
@@ -508,7 +528,7 @@ pipeline {
                     sh '''
                         set -e
 
-                        echo "Deploying to EC2..."
+                        echo "Deploying application to EC2..."
 
 
                         ssh \
@@ -629,7 +649,7 @@ pipeline {
                         sleep 15
 
 
-                        echo "Checking Compose status..."
+                        echo "Compose status:"
 
                         docker compose ps
 
@@ -653,9 +673,6 @@ pipeline {
                         echo "Deployment successful."
 
 
-                        exit 0
-
-
                         REMOTE_SCRIPT
                     '''
                 }
@@ -674,7 +691,7 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "Checking deployed frontend..."
+                    echo "Checking frontend..."
 
                     curl --fail \
                         http://${DEPLOY_HOST}/
@@ -682,7 +699,7 @@ pipeline {
                     echo
 
 
-                    echo "Checking deployed backend..."
+                    echo "Checking backend..."
 
                     curl --fail \
                         http://${DEPLOY_HOST}:5000/health
@@ -732,10 +749,6 @@ pipeline {
             echo '''
             ==========================================
             PIPELINE FAILED
-            ==========================================
-
-            Check Jenkins console output.
-
             ==========================================
             '''
         }
