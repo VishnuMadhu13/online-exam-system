@@ -20,8 +20,8 @@ pipeline {
         // ==========================================
         DOCKER_CREDENTIALS = 'dockerhub-credentials'
         SSH_CREDENTIALS = 'deployment-server-ssh'
-        MONGO_CREDENTIALS = 'mongodb-uri'
-        JWT_CREDENTIALS = 'jwt-secret'
+        MONGO_CREDENTIALS = 'mongodb://localhost:27017/OnlineExamdb'
+        JWT_CREDENTIALS = 'onlineexamsystem2024supersecretkey'
 
         // ==========================================
         // DEPLOYMENT SERVER
